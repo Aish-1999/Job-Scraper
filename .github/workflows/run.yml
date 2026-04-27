@@ -2,7 +2,7 @@ name: Job Alert Bot
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 7,13,19 * * *"
   workflow_dispatch:
 
 jobs:
@@ -26,7 +26,6 @@ jobs:
           EMAIL_USER:       ${{ secrets.EMAIL_USER }}
           EMAIL_PASS:       ${{ secrets.EMAIL_PASS }}
 
-      - name: Save seen jobs
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "update seen jobs"
