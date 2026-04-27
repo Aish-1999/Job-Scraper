@@ -2,7 +2,7 @@ name: Job Alert Bot
 
 on:
   schedule:
-    - cron: "*/8 * * * *"   # every 8 minutes
+    - cron: "*/8 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -14,16 +14,14 @@ jobs:
       cancel-in-progress: true
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests beautifulsoup4
 
       - name: Run scraper
         run: python scraper.py
@@ -33,8 +31,7 @@ jobs:
           EMAIL_USER:       ${{ secrets.EMAIL_USER }}
           EMAIL_PASS:       ${{ secrets.EMAIL_PASS }}
 
-      - name: Commit seen jobs
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "update seen jobs"
           file_pattern: seen_jobs.json
