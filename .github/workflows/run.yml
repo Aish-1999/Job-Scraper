@@ -9,21 +9,24 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - run: pip install requests beautifulsoup4 python-dotenv
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
 
-      - run: python scraper.py
+      - name: Run scraper
+        run: python scraper.py
         env:
           TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           EMAIL_USER:       ${{ secrets.EMAIL_USER }}
           EMAIL_PASS:       ${{ secrets.EMAIL_PASS }}
 
-      - uses: stefanzweifel/git-auto-commit-action@v4
+      - name: Save seen jobs
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "update seen jobs"
