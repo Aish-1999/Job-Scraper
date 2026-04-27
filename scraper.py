@@ -1,10 +1,7 @@
 import requests, json, smtplib, os, base64, warnings
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 warnings.filterwarnings("ignore")
-
-# Load keywords
-with open("keywords.json") as f:
-    KEYWORDS = [k.lower() for k in json.load(f)["keywords"]]
 
 # Load seen jobs
 try:
@@ -19,13 +16,12 @@ CHAT_ID    = os.environ["TELEGRAM_CHAT_ID"]
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 
-# Must have BOTH a role keyword AND a student keyword
+# Must match BOTH a role AND a student keyword
 ROLE_KEYWORDS = [
     "data science", "machine learning", "nlp", "deep learning",
-    "computer vision", "data analyst", "mlops", "ki ", "ai ",
-    "künstliche intelligenz", "data engineer"
+    "computer vision", "data analyst", "mlops", "ai ",
+    "künstliche intelligenz", "data engineer", "python"
 ]
-
 STUDENT_KEYWORDS = [
     "werkstudent", "praktikum", "praktikant", "internship",
     "intern", "thesis", "bachelorarbeit", "masterarbeit",
@@ -33,18 +29,20 @@ STUDENT_KEYWORDS = [
 ]
 
 def is_relevant(title):
-    title = title.lower()
-    has_role    = any(k in title for k in ROLE_KEYWORDS)
-    has_student = any(k in title for k in STUDENT_KEYWORDS)
-    return has_role and has_student
+    t = title.lower()
+    return any(r in t for r in ROLE_KEYWORDS) and any(s in t for s in STUDENT_KEYWORDS)
+
+def is_recent(date_str):
+    """Only allow jobs posted in last 2 days"""
+    try:
+        posted = datetime.strptime(date_str, "%Y-%m-%d")
+        return datetime.now() - posted <= timedelta(days=2)
+    except:
+        return False
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={
-        "chat_id": CHAT_ID,
-        "text": msg,
-        "parse_mode": "HTML"
-    })
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
 
 def send_email(subject, body):
     msg = MIMEText(body)
@@ -65,15 +63,15 @@ HEADERS = {
 def scrape_arbeitsagentur(query):
     jobs = []
     params = {
-    'angebotsart': '1',
-    'page': '1',
-    'pav': 'false',
-    'size': '25',
-    'umkreis': '200',
-    'was': query,
-    'wo': 'Deutschland',
-    'veroeffentlichtseit': '1',  # only jobs posted in last 24 hours
-}
+        'angebotsart': '1',
+        'page': '1',
+        'pav': 'false',
+        'size': '25',
+        'umkreis': '200',
+        'was': query,
+        'wo': 'Deutschland',
+        'veroeffentlichtseit': '2',  # only last 2 days
+    }
     try:
         resp = requests.get(
             'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs',
@@ -81,66 +79,48 @@ def scrape_arbeitsagentur(query):
         )
         data = resp.json()
         for job in data.get("stellenangebote") or []:
-            title   = job.get("titel", "")
-            company = job.get("arbeitgeber", "Unknown")
-            refnr   = job.get("refnr", "")
-            encoded = base64.b64encode(refnr.encode()).decode()
-            url     = f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{encoded}"
-            if is_relevant(title):
+            title    = job.get("titel", "")
+            company  = job.get("arbeitgeber", "Unknown")
+            refnr    = job.get("refnr", "")
+            date_str = job.get("aktuelleVeroeffentlichungsdatum", "")
+            encoded  = base64.b64encode(refnr.encode()).decode()
+            url      = f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{encoded}"
+
+            # Double check date in case API ignores the filter
+            if is_relevant(title) and is_recent(date_str):
                 jobs.append({
                     "title":   title,
                     "company": company,
                     "url":     url,
+                    "date":    date_str,
                     "source":  "Arbeitsagentur"
                 })
     except Exception as e:
-        print(f"Arbeitsagentur error: {e}")
+        print(f"Error for '{query}': {e}")
     return jobs
 
-def scrape_linkedin(query):
-    jobs = []
-    url = f"https://www.linkedin.com/jobs/search/?keywords={query}&location=Germany&f_E=1%2C2&sortBy=DD"
-    try:
-        from bs4 import BeautifulSoup
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for card in soup.select(".base-card"):
-            title   = card.select_one(".base-search-card__title")
-            company = card.select_one(".base-search-card__subtitle")
-            link    = card.select_one("a")
-            if title and is_relevant(title.text):
-                jobs.append({
-                    "title":   title.text.strip(),
-                    "company": company.text.strip() if company else "Unknown",
-                    "url":     link["href"].split("?")[0] if link else "",
-                    "source":  "LinkedIn"
-                })
-    except Exception as e:
-        print(f"LinkedIn error: {e}")
-    return jobs
+# Search queries
+QUERIES = [
+    "Werkstudent Data Science",
+    "Praktikum Machine Learning",
+    "Werkstudent Machine Learning",
+    "Praktikum Data Science",
+    "Praktikum NLP",
+    "Thesis Data Science",
+    "Werkstudent NLP",
+    "Praktikum Deep Learning",
+    "Werkstudent AI",
+    "Praktikum Künstliche Intelligenz"
+]
 
-# Run scrapers
-print("Scraping Arbeitsagentur...")
-aa_jobs = (
-    scrape_arbeitsagentur("Werkstudent Data Science") +
-    scrape_arbeitsagentur("Praktikum Machine Learning") +
-    scrape_arbeitsagentur("Werkstudent Machine Learning") +
-    scrape_arbeitsagentur("Praktikum Data Science") +
-    scrape_arbeitsagentur("Praktikum NLP") +
-    scrape_arbeitsagentur("Thesis Data Science")
-)
-print(f"Arbeitsagentur: {len(aa_jobs)} relevant jobs")
+# Run all searches
+all_jobs = []
+for query in QUERIES:
+    results = scrape_arbeitsagentur(query)
+    print(f"'{query}': {len(results)} fresh jobs")
+    all_jobs.extend(results)
 
-print("Scraping LinkedIn...")
-li_jobs = (
-    scrape_linkedin("werkstudent+data+science+germany") +
-    scrape_linkedin("praktikum+machine+learning+germany") +
-    scrape_linkedin("data+science+internship+germany")
-)
-print(f"LinkedIn: {len(li_jobs)} relevant jobs")
-
-# Combine and deduplicate
-all_jobs = aa_jobs + li_jobs
+# Deduplicate by URL
 seen_urls = set()
 unique_jobs = []
 for job in all_jobs:
@@ -148,25 +128,25 @@ for job in all_jobs:
         seen_urls.add(job["url"])
         unique_jobs.append(job)
 
-# Only new jobs, max 15 per run
+# Only new ones, max 15
 new_jobs = [j for j in unique_jobs if j["url"] not in seen][:15]
-print(f"New jobs to send: {len(new_jobs)}")
+print(f"\nTotal unique fresh: {len(unique_jobs)}, New to send: {len(new_jobs)}")
 
 for job in new_jobs:
     msg = (
         f"🔔 <b>New Job Alert!</b>\n\n"
         f"<b>{job['title']}</b>\n"
         f"🏢 {job['company']}\n"
-        f"📌 {job['source']}\n"
+        f"📅 Posted: {job['date']}\n"
         f"🔗 {job['url']}"
     )
     send_telegram(msg)
     send_email(
-        subject=f"[{job['source']}] {job['title']} at {job['company']}",
-        body=f"{job['title']} at {job['company']}\nSource: {job['source']}\n\n{job['url']}"
+        subject=f"New Job: {job['title']} at {job['company']}",
+        body=f"{job['title']} at {job['company']}\nPosted: {job['date']}\n\n{job['url']}"
     )
     seen.add(job["url"])
-    print(f"✅ Sent: {job['title']} at {job['company']}")
+    print(f"✅ Sent: {job['title']} | {job['date']}")
 
 with open("seen_jobs.json", "w") as f:
     json.dump(list(seen), f)
