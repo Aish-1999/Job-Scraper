@@ -65,14 +65,15 @@ HEADERS = {
 def scrape_arbeitsagentur(query):
     jobs = []
     params = {
-        'angebotsart': '1',
-        'page': '1',
-        'pav': 'false',
-        'size': '25',
-        'umkreis': '200',
-        'was': query,
-        'wo': 'Deutschland',
-    }
+    'angebotsart': '1',
+    'page': '1',
+    'pav': 'false',
+    'size': '25',
+    'umkreis': '200',
+    'was': query,
+    'wo': 'Deutschland',
+    'veroeffentlichtseit': '1',  # only jobs posted in last 24 hours
+}
     try:
         resp = requests.get(
             'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs',
