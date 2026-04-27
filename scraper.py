@@ -1,27 +1,40 @@
 import requests, json, smtplib, os, base64, warnings
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
+
 warnings.filterwarnings("ignore")
 
+# ==============================
 # Load seen jobs
-try:
-    with open("seen_jobs.json") as f:
-        seen = set(json.load(f))
-except:
+# ==============================
+SEEN_FILE = "seen_jobs.json"
+
+if os.path.exists(SEEN_FILE):
+    try:
+        with open(SEEN_FILE, "r") as f:
+            seen = set(json.load(f))
+    except:
+        seen = set()
+else:
     seen = set()
 
+# ==============================
 # Credentials
-BOT_TOKEN  = os.environ["TELEGRAM_TOKEN"]
-CHAT_ID    = os.environ["TELEGRAM_CHAT_ID"]
-EMAIL_USER = os.environ["EMAIL_USER"]
-EMAIL_PASS = os.environ["EMAIL_PASS"]
+# ==============================
+BOT_TOKEN  = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID")
+EMAIL_USER = os.environ.get("EMAIL_USER")
+EMAIL_PASS = os.environ.get("EMAIL_PASS")
 
-# Must match BOTH a role AND a student keyword
+# ==============================
+# Keywords
+# ==============================
 ROLE_KEYWORDS = [
     "data science", "machine learning", "nlp", "deep learning",
-    "computer vision", "data analyst", "mlops", "ai ",
+    "computer vision", "data analyst", "mlops", "ai",
     "künstliche intelligenz", "data engineer", "python"
 ]
+
 STUDENT_KEYWORDS = [
     "werkstudent", "praktikum", "praktikant", "internship",
     "intern", "thesis", "bachelorarbeit", "masterarbeit",
@@ -33,31 +46,44 @@ def is_relevant(title):
     return any(r in t for r in ROLE_KEYWORDS) and any(s in t for s in STUDENT_KEYWORDS)
 
 def is_recent(date_str):
-    """Only allow jobs posted in last 2 days"""
+    """Last 24 hours (approx since API gives only date)"""
     try:
         posted = datetime.strptime(date_str, "%Y-%m-%d")
-        return datetime.now() - posted <= timedelta(days=2)
+        return datetime.now() - posted <= timedelta(days=1)
     except:
         return False
 
+# ==============================
+# Notifications
+# ==============================
 def send_telegram(msg):
+    if not BOT_TOKEN or not CHAT_ID:
+        return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
+    requests.post(url, json={
+        "chat_id": CHAT_ID,
+        "text": msg,
+        "parse_mode": "HTML"
+    })
 
 def send_email(subject, body):
+    if not EMAIL_USER or not EMAIL_PASS:
+        return
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_USER
+
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(EMAIL_USER, EMAIL_PASS)
         s.send_message(msg)
 
+# ==============================
+# API Config
+# ==============================
 HEADERS = {
-    'User-Agent': 'Jobsuche/2.9.2 (de.arbeitsagentur.jobboerse; build:1077; iOS 15.1.0) Alamofire/5.4.4',
-    'Host': 'rest.arbeitsagentur.de',
+    'User-Agent': 'Jobsuche/2.9.2',
     'X-API-Key': 'jobboerse-jobsuche',
-    'Connection': 'keep-alive',
 }
 
 def scrape_arbeitsagentur(query):
@@ -65,41 +91,51 @@ def scrape_arbeitsagentur(query):
     params = {
         'angebotsart': '1',
         'page': '1',
-        'pav': 'false',
         'size': '25',
         'umkreis': '200',
         'was': query,
         'wo': 'Deutschland',
-        'veroeffentlichtseit': '2',  # only last 2 days
+        'veroeffentlichtseit': '1',  # last 24h
     }
+
     try:
         resp = requests.get(
             'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs',
-            headers=HEADERS, params=params, verify=False, timeout=15
+            headers=HEADERS,
+            params=params,
+            timeout=15
         )
+
         data = resp.json()
-        for job in data.get("stellenangebote") or []:
+
+        for job in data.get("stellenangebote", []):
             title    = job.get("titel", "")
             company  = job.get("arbeitgeber", "Unknown")
             refnr    = job.get("refnr", "")
             date_str = job.get("aktuelleVeroeffentlichungsdatum", "")
-            encoded  = base64.b64encode(refnr.encode()).decode()
-            url      = f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{encoded}"
 
-            # Double check date in case API ignores the filter
+            if not refnr:
+                continue
+
+            encoded = base64.b64encode(refnr.encode()).decode()
+            url = f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{encoded}"
+
             if is_relevant(title) and is_recent(date_str):
                 jobs.append({
-                    "title":   title,
+                    "title": title,
                     "company": company,
-                    "url":     url,
-                    "date":    date_str,
-                    "source":  "Arbeitsagentur"
+                    "url": url,
+                    "date": date_str
                 })
+
     except Exception as e:
         print(f"Error for '{query}': {e}")
+
     return jobs
 
-# Search queries
+# ==============================
+# Queries
+# ==============================
 QUERIES = [
     "Werkstudent Data Science",
     "Praktikum Machine Learning",
@@ -113,42 +149,42 @@ QUERIES = [
     "Praktikum Künstliche Intelligenz"
 ]
 
-# Run all searches
+# ==============================
+# Run
+# ==============================
 all_jobs = []
+
 for query in QUERIES:
     results = scrape_arbeitsagentur(query)
-    print(f"'{query}': {len(results)} fresh jobs")
+    print(f"{query}: {len(results)} jobs")
     all_jobs.extend(results)
 
-# Deduplicate by URL
-seen_urls = set()
-unique_jobs = []
-for job in all_jobs:
-    if job["url"] and job["url"] not in seen_urls:
-        seen_urls.add(job["url"])
-        unique_jobs.append(job)
+# Deduplicate
+unique_jobs = {job["url"]: job for job in all_jobs}.values()
 
-# Only new ones, max 15
+# Filter new
 new_jobs = [j for j in unique_jobs if j["url"] not in seen][:15]
-print(f"\nTotal unique fresh: {len(unique_jobs)}, New to send: {len(new_jobs)}")
+
+print(f"\nNew jobs to send: {len(new_jobs)}")
 
 for job in new_jobs:
     msg = (
-        f"🔔 <b>New Job Alert!</b>\n\n"
-        f"<b>{job['title']}</b>\n"
+        f"🔔 <b>{job['title']}</b>\n"
         f"🏢 {job['company']}\n"
-        f"📅 Posted: {job['date']}\n"
+        f"📅 {job['date']}\n"
         f"🔗 {job['url']}"
     )
+
     send_telegram(msg)
     send_email(
-        subject=f"New Job: {job['title']} at {job['company']}",
-        body=f"{job['title']} at {job['company']}\nPosted: {job['date']}\n\n{job['url']}"
+        f"{job['title']} at {job['company']}",
+        f"{job['title']} at {job['company']}\n{job['date']}\n\n{job['url']}"
     )
-    seen.add(job["url"])
-    print(f"✅ Sent: {job['title']} | {job['date']}")
 
-with open("seen_jobs.json", "w") as f:
+    seen.add(job["url"])
+
+# Save seen jobs
+with open(SEEN_FILE, "w") as f:
     json.dump(list(seen), f)
 
 print("Done!")
